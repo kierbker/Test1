@@ -1,0 +1,800 @@
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <pthread.h>
+#include <unistd.h>
+
+//Define Constants
+// positions of the sensors
+#define sensor1 6
+#define sensor2 sensor1 + 2
+#define gate sensor2 + 7
+#define countSensor gate + 6
+#define beltLentgh 27
+
+//Global Variables
+// Conveyor Belt
+int conveyor0[beltLentgh] = { 0}, conveyor1[beltLentgh] = { 0 };
+
+char sensors[beltLentgh];
+int C0S1, C0S2, C1S1, C1S2, CountS0, CountS1;	// ints to store 'what the sensors are reading'
+
+
+int cb0FSM(int sensorState0);
+int cb1FSM(int sensorState1);
+int readCountSensor();
+int setGate();
+int C0S1, C0S2, C1S1, C1S2, CountS0, CountS1;    // these need to read from certain elements of the CBs
+int readSizeSensor();
+void *beltMovement(void);
+
+// THREAD FUNCTION
+
+void createThreads(void)
+{
+    pthread_t movement;
+    pthread_t readSizeSensors;
+    pthread_t boxSize0;
+    pthread_t boxSize1;
+    pthread_t readCountSensors;
+    pthread_t Gate;
+
+    pthread_create(&movement, NULL, beltMovement, NULL);
+    pthread_create(&readSizeSensors, NULL, readSizeSensor, NULL);
+    pthread_create(&boxSize0, NULL, cb0FSM, NULL);
+    pthread_create(&boxSize1, NULL, cb1FSM, NULL);
+    pthread_create(&readCountSensors, NULL, readCountSensor, NULL);
+    pthread_create(&Gate, NULL, setGate, NULL);
+
+    return;
+}
+// SENSORS FUNCTION
+
+int C0S1, C0S2, C1S1, C1S2, CountS0, CountS1;	// these need to read from certain elements of the CBs
+int sensorState0;
+int sensorState1;
+int gateState;
+int gateShutCB0;
+int gateShutCB1;
+int detectedSmallBoxes;
+int detectedLargeBoxes;
+
+int readSizeSensor()
+{
+	//(Size sensors)
+
+	// if reading from CBO...
+	if (C0S1 == 0 && C0S2 == 0)
+	{
+		sensorState0 = 0;
+	}	// no boxes
+	else if (C0S1 == 1 && C0S2 == 0)
+	{
+		sensorState0 = 1;
+	}	// first sensor only, box on the way
+	else if (C0S1 == 0 && C0S2 == 1)
+	{
+		sensorState0 = 2;
+	}	// second sensor only, box leaving
+	else if (C0S1 == 1 && C0S2 == 1)
+	{
+		sensorState0 = 3;
+	}	// both at the same time, large box
+
+	// else of reading from CB2
+	if (C1S1 == 0 && C1S2 == 0)
+	{
+		sensorState1 = 0;
+	}	// no boxes
+	else if (C1S1 == 1 && C1S2 == 0)
+	{
+		sensorState1 = 1;
+	}	// first sensor only, box on the way
+	else if (C1S1 == 0 && C1S2 == 1)
+	{
+		sensorState1 = 2;
+	}	// second sensor only, box leaving
+	else if (C1S1 == 1 && C1S2 == 1)
+	{
+		sensorState1 = 3;
+	}	// both at the same time, large box
+
+	return;
+}	//sensorState
+
+int cb0FSM(sensorState0)
+{
+	//FSM FOR PACKAGE SIZE
+
+	int Size = sensorState0;
+	int state = 0;
+	int boxSize;
+
+	switch (state)
+	{
+		case 0:	// no previous readings
+			switch (Size)
+			{
+				case 0:	// nothing detected on the sensors
+					state = 0;
+					boxSize = 0;
+					break;
+				case 1:	// sensor 1 tripped
+					state = 1;
+					boxSize = 1;
+					break;
+			}
+
+			break;
+
+		case 1:	// object in front of sensor 1
+			switch (Size)
+			{
+				case 0:	// nothing detected on the sensors - indicates small box
+					state = 2;
+					boxSize = 2;
+					break;
+				case 1:	// sensor 1 tripped again
+					state = 4;
+					boxSize = 1;
+					break;
+			}
+
+			break;
+		case 2:	// small box in between sensors
+			switch (Size)
+			{
+				case 2:	// sensor 2 tripped
+					state = 3;
+					boxSize = 2;
+					break;
+			}
+
+			break;
+		case 3:	//only sensor 2 tripped by small box
+			switch (Size)
+			{
+				case 0:	// nothing detected on the sensors, box left return to start, start timer to kick it off the belt?
+					state = 0;
+					boxSize = 0;
+					gateShutCB0 = 1;
+					detectedSmallBoxes + 1;
+					break;
+			}
+
+			break;
+		case 4:	// sensor 1 tripped and one in the middle
+			switch (Size)
+			{
+				case 3:	// sensor 1 and 2 tripped
+					state = 5;
+					boxSize = 3;
+					break;
+			}
+
+			break;
+		case 5:	//both sensors tripped
+			switch (Size)
+			{
+				case 2:	// sensor 2 tripped
+					state = 6;
+					boxSize = 3;
+					break;
+			}
+
+			break;
+		case 6:	//sensor 2 tripped and one in the middle
+			switch (Size)
+			{
+				case 2:	// only sensor 2 tripped, last bit of box leaving
+					state = 7;
+					boxSize = 3;
+					detectedLargeBoxes + 1;
+					break;
+			}
+
+			break;
+		case 7:	// sensor 2 tripped, last bit of large box left
+			switch (Size)
+			{
+				case 0:	// nothing detected on the sensors return to state 0
+					state = 0;
+					boxSize = 0;
+					break;
+				case 1:	// sensor 1 tripped
+					state = 1;
+					boxSize = 1;
+					break;
+			}
+
+			break;
+	}
+
+	return boxSize;
+}
+
+int cb1FSM(sensorState1)
+{
+	//FSM FOR PACKAGE SIZE
+
+	int Size = sensorState1;
+	int state = 0;
+	int boxSize;
+
+	switch (state)
+	{
+		case 0:	// no previous readings
+			switch (Size)
+			{
+				case 0:	// nothing detected on the sensors
+					state = 0;
+					boxSize = 0;
+					break;
+				case 1:	// sensor 1 tripped
+					state = 1;
+					boxSize = 1;
+					break;
+			}
+
+			break;
+
+		case 1:	// object in front of sensor 1
+			switch (Size)
+			{
+				case 0:	// nothing detected on the sensors - indicates small box
+					state = 2;
+					boxSize = 2;
+					break;
+				case 1:	// sensor 1 tripped again
+					state = 4;
+					boxSize = 1;
+					break;
+			}
+
+			break;
+		case 2:	// small box in between sensors
+			switch (Size)
+			{
+				case 2:	// sensor 2 tripped
+					state = 3;
+					boxSize = 2;
+					break;
+			}
+
+			break;
+		case 3:	//only sensor 2 tripped by small box
+			switch (Size)
+			{
+				case 0:	// nothing detected on the sensors, box left return to start, start timer to kick it off the belt?
+					state = 0;
+					boxSize = 0;
+					gateShutCB1 = 1;
+					detectedSmallBoxes + 1;
+
+					break;
+			}
+
+			break;
+		case 4:	// sensor 1 tripped and one in the middle
+			switch (Size)
+			{
+				case 3:	// sensor 1 and 2 tripped
+					state = 5;
+					boxSize = 3;
+					break;
+			}
+
+			break;
+		case 5:	//both sensors tripped
+			switch (Size)
+			{
+				case 2:	// sensor 2 tripped
+					state = 6;
+					boxSize = 3;
+					break;
+			}
+
+			break;
+		case 6:	//sensor 2 tripped and one in the middle
+			switch (Size)
+			{
+				case 2:	// only sensor 2 tripped, last bit of box leaving
+					state = 7;
+					boxSize = 3;
+					detectedLargeBoxes + 1;
+					break;
+			}
+
+			break;
+		case 7:	// sensor 2 tripped, last bit of large box left
+			switch (Size)
+			{
+				case 0:	// nothing detected on the sensors return to state 0
+					state = 0;
+					boxSize = 0;
+					break;
+				case 1:	// sensor 1 tripped
+					state = 1;
+					boxSize = 1;
+					break;
+			}
+
+			break;
+	}
+
+	return boxSize;
+}
+
+int setGate()
+{
+	//(Gate Shut Flags){
+	if (gateShutCB0 == 0 && gateShutCB1 == 0)
+	{
+		gateState = 0;
+	}	// two small boxes, both gates shut
+	else if (gateShutCB0 == 1 && gateShutCB1 == 0)
+	{
+		gateState = 1;
+	}	//small only on CB 2, CB2 gate shut
+	else if (gateShutCB0 == 0 && gateShutCB1 == 1)
+	{
+		gateState = 2;
+	}	//small only on CB 1, CB1 gate shut
+	else if (gateShutCB0 == 1 && gateShutCB1 == 1)
+	{
+		gateState = 3;
+	}	//no small boxes, both gates open
+
+	return gateState;
+}
+
+
+
+extern int menuChoice = 0;
+int detectedSmallBoxes = 0;
+int detectedLargeBoxes = 0;
+
+int C0S1, C0S2, C1S1, C1S2, CountS0, CountS1;	// these need to read from certain elements of the CBs
+
+void displaySmallCount();	//(countvalues);
+void displayLargeDetected();	//(countvalues){
+void displayLargeCount();	//(countvalues);
+void counterResets();	//(countvalues);
+int collectedLargeBoxes = 0;
+int readCountSensor();	//(Count sensors from each CB)
+
+void displayLargeDetected()
+{
+	//(countvalues){
+	//int detectedLargeBoxes=0;
+	while (1)
+	{
+		system("cls");
+        printf("*********************************************************************************\n");
+        printf("                Conveyor Belt System - Detection Data                            \n");
+        printf("*********************************************************************************\n\n");
+        printf("The Total number of small boxes detected is: %d\n", detectedSmallBoxes);
+		printf("The Total number of large boxes detected is: %d\n", detectedLargeBoxes);
+		printf("\n\nHit Space Bar to Return to Main Menu.");
+		detectedSmallBoxes = detectedSmallBoxes + 1;
+		detectedLargeBoxes = detectedLargeBoxes + 1;
+		sleep(1);
+		if (kbhit())
+		{
+			menuChoice = 0;	//if any button pressed go back to main menu
+			return;
+		}
+	}
+
+	return;
+}
+
+
+void displayLargeCount()
+{
+	//(countvalues){
+	//int collectedLargeBoxes=0;
+	while (1)
+	{
+		system("cls");
+        printf("*********************************************************************************\n");
+        printf("                Conveyor Belt System - Collection Data                           \n");
+        printf("*********************************************************************************\n\n");
+		printf("The Total number of large boxes collected is: %d\n", collectedLargeBoxes);
+		printf("\n\nHit Space Bar to Return to Main Menu.");
+		collectedLargeBoxes = collectedLargeBoxes + 1;
+		sleep(1);
+		if (kbhit())
+		{
+			menuChoice = 0;	//if any button pressed go back to main menu
+			return;
+		}
+	}
+
+	return;
+}
+
+void counterResets()
+{
+	//(countvalues){
+	detectedSmallBoxes = 0;
+	detectedLargeBoxes = 0;
+	collectedLargeBoxes = 0;
+	system("cls");
+    printf("*********************************************************************************\n");
+    printf("                Conveyor Belt System - Counter Reset                             \n");
+    printf("*********************************************************************************\n\n");
+	printf("Counters Reset");
+	sleep(2);
+	menuChoice = 0;
+	return;
+}
+
+
+// COUNTER FUNCTIONS
+
+
+int readCountSensor()
+{
+	//(Count sensors from each CB){
+	//shows for only one CB but will need to have an option for reading from either one
+	int Size0 = CountS0;
+	int state0 = 0;
+	int cb0Count;
+	int Size1 = CountS1;
+	int state1 = 0;
+	int cb1Count;
+
+	switch (state0)
+	{
+		case 0:	// no previous readings
+			switch (Size0)
+			{
+				case 0:	// nothing detected on the sensors
+					state0 = 0;
+					break;
+
+				case 1:	// sensor tripped
+					state0 = 1;
+					break;
+			}
+
+			break;
+
+		case 1:	// first of 3 '1s'
+			switch (Size0)
+			{
+				case 0:	// nothing detected on the sensors - indicates small box error
+					state0 = 4;
+					break;
+				case 1:	// sensor reads 1 again
+					state0 = 2;
+					break;
+			}
+
+			break;
+		case 2:	// 2 of 3 '1s'
+			switch (Size0)
+			{
+				case 0:	// nothing detected on the sensors - indicates small box
+					state0 = 4;
+					break;
+				case 1:	//  sensor reads 1 again
+					state0 = 3;
+					break;
+			}
+
+			break;
+		case 3:	//3 of 3 '1s'
+			switch (Size0)
+			{
+				case 0:	// nothing detected on the sensors - indicates small box, back to start
+					state0 = 1;
+					collectedLargeBoxes++;
+					break;
+				case 1:	// sensor reads 1 again - too many = error
+					state0 = 5;
+					break;
+			}
+
+		case 4:	// small box error
+			printf("SIZE ERROR - Small Box Detected.\n");
+			break;
+		case 5:	//too large box error
+			printf("SIZE ERROR - Unknown Box Detected.\n");
+			break;
+	}
+
+	switch (state1)
+	{
+		case 0:	// no previous readings
+			switch (Size1)
+			{
+				case 0:	// nothing detected on the sensors
+					state1 = 0;
+					break;
+
+				case 1:	// sensor tripped
+					state1 = 1;
+					break;
+			}
+
+			break;
+
+		case 1:	// first of 3 '1s'
+			switch (Size1)
+			{
+				case 0:	// nothing detected on the sensors - indicates small box error
+					state1 = 4;
+					break;
+				case 1:	// sensor reads 1 again
+					state1 = 2;
+					break;
+			}
+
+			break;
+		case 2:	// 2 of 3 '1s'
+			switch (Size1)
+			{
+				case 0:	// nothing detected on the sensors - indicates small box
+					state1 = 4;
+					break;
+				case 1:	//  sensor reads 1 again
+					state1 = 3;
+					break;
+			}
+
+			break;
+		case 3:	//3 of 3 '1s'
+			switch (Size1)
+			{
+				case 0:	// nothing detected on the sensors - indicates small box, back to start
+					state1 = 1;
+					collectedLargeBoxes++;
+					break;
+				case 1:	// sensor reads 1 again - too many = error
+					state1 = 5;
+					break;
+			}
+
+		case 4:	// small box error
+			printf("SIZE ERROR - Small Box Detected.\n");
+			break;
+		case 5:	//too large box error
+			printf("SIZE ERROR - Unknown Box Detected.\n");
+			break;
+	}
+
+	return;
+}
+
+
+void *beltMovement(void)
+{
+    srand(time(NULL)); // initialize random number generator with current time
+
+    int i, n = beltLentgh, k = 0;
+    int delay;
+
+    while (k < beltLentgh)
+    {
+        int boxType = (rand() % 2 == 0) ? 1 : 1111; // generate either 1 or 111
+        conveyor0[k] = boxType;
+        boxType = (rand() % 2 == 0) ? 1 : 1111; // generate either 1 or 111
+        conveyor1[k] = (boxType == 1) ? 1111 : 1; // generate the opposite box size for conveyor1
+
+        k++;
+
+        if (k % 5 == 0) // add a delay after every 5 boxes
+        {
+            delay = (rand() % 5) + 1; // generate a random delay between 1 and 5 seconds
+            sleep(delay); // pause the program execution for the random delay
+        }
+    }
+
+    // Force only 1s and 111s on the conveyor belts
+    for (i = 0; i < beltLentgh; i++)
+    {
+        if (conveyor0[i] != 1 && conveyor0[i] != 1111) conveyor0[i] = 0;
+        if (conveyor1[i] != 1 && conveyor1[i] != 1111) conveyor1[i] = 0;
+    }
+
+    return NULL;
+}
+
+
+
+
+
+int mainMenuDisplay(void)
+{
+	int choice;
+	system("cls");
+	printf("************************************************************\n");
+	printf("                     Welcome!                               \n");
+	printf("         Team 1 - RTES - Conveyor Belt System               \n");
+	printf("************************************************************\n\n");
+	printf("Please select an option below: \n\n");
+	printf("Insert 1 to display the Conveyor Belt simulation.\n");
+	printf("Insert 2 to display detection data.\n");
+	printf("Insert 3 to display collection data.\n");
+	printf("Insert 4 to reset all counters.\n");
+	printf("Insert 5 to Shut down.\n\n");
+	printf("************************************************************\n");
+	scanf("%d", &choice);
+	return choice;
+}
+
+
+void displayConveyorBelts()
+{
+    int i, j, n = beltLentgh, k = 0;
+    int delay;
+    system("cls");
+    while (1)
+{
+    for (k = 0; k < beltLentgh; k++)
+    {
+        for (i = n - 1; i > 0 ; i--)
+        {
+            conveyor0[i] = conveyor0[i - 1];
+            conveyor1[i] = conveyor1[i - 1];
+        }
+        int boxType = (rand() % 2 == 0) ? 1 : 1111; // generate either 1 or 111
+        conveyor0[0] = boxType;
+        boxType = (rand() % 2 == 0) ? 1 : 1111; // generate either 1 or 111
+        conveyor1[0] = (boxType == 1) ? 1111 : 1; // generate the opposite box size for conveyor1
+
+
+            /*Print Title */
+            printf("*********************************************************************************\n");
+            printf("                        Conveyor Belt System Simulation                          \n");
+            printf("*********************************************************************************\n\n");
+
+            /*Print Belt 1 with sensors and gates */
+            printf("Belt 1:\n");
+            printf("            ");
+            for (i = 0; i < n; i++)
+            {
+                if (i == sensor1) printf("S1 ");
+                else if (i == sensor2) printf("S2 ");
+                else if (i == gate) printf("G1 ");
+                else if (i == countSensor) printf("C1 ");
+                else printf("  ");
+            }
+
+            printf("\n");
+
+            /*Print first separator line */
+            printf("            ");
+            for (i = 0; i < n; i++)
+            {
+                printf("-");
+            }
+            printf("-------------------------------------\n");
+
+      /*Print Belt 1 boxes */
+printf("            ");
+printf(" ");
+for (i = 0; i < n; i++)
+{
+    if (conveyor0[i] == 0) printf(" ");
+    else if (i == gate && conveyor0[i] == 1 && conveyor0[i+1] != 1 && conveyor0[i-1] != 1) // Small box reached the gate
+    {
+        conveyor0[i] = 0; // Remove the small box
+    }
+    else printf("%d", conveyor0[i]);
+    printf(" ");
+}
+
+
+            printf("\n");
+
+            /*Print second separator line */
+            printf("            ");
+            for (i = 0; i < n; i++)
+            {
+                printf("-");
+            }
+
+            printf("-------------------------------------\n");
+
+            /*Print Belt 2 with sensors and gates */
+            printf("Belt 2:\n");
+            printf("            ");
+            for (i = 0; i < n; i++)
+            {
+                if (i == sensor1) printf("S1 ");
+                else if (i == sensor2) printf("S2 ");
+                else if (i == gate) printf("G2 ");
+                else if (i == countSensor) printf("C2 ");
+                else printf("  ");
+            }
+
+            printf("\n");
+
+            /*Print first separator line */
+            printf("            ");
+            for (i = 0; i < n; i++)
+
+{
+printf("-");
+}
+printf("-------------------------------------\n");
+
+        /*Print Belt 2 boxes */
+        printf("            ");
+        printf(" ");
+        for (i = 0; i < n; i++)
+        {
+            if (conveyor1[i] == 0) printf(" ");
+            else if (i == gate && conveyor1[i] == 1 && conveyor1[i+1] != 1 && conveyor1[i-1] != 1) // Small box reached the gate
+            {
+                conveyor1[i] = 0; // Remove the small box
+            }
+            else printf("%d", conveyor1[i]);
+            printf(" ");
+        }
+
+        printf("\n");
+
+        /*Print third separator line */
+        printf("            ");
+        for (i = 0; i < n; i++)
+        {
+            printf("-");
+        }
+        printf("-------------------------------------\n");
+
+
+        Sleep(1000); // Pause the program for 1 second
+        system ("cls");
+
+    }
+}
+}
+int main()
+{
+	//motorStart();
+	// motorStart();	// Call the motorStart() function
+
+	menuChoice = mainMenuDisplay();
+
+	while (1)
+	{
+		if (menuChoice == 0)
+		{
+			menuChoice = mainMenuDisplay();
+		}
+
+		if (menuChoice == 1)
+		{
+			displayConveyorBelts();
+		}
+
+		if (menuChoice == 2)
+		{
+			displayLargeDetected();
+		}
+
+		if (menuChoice == 3)
+		{
+			displayLargeCount();
+		}
+
+		if (menuChoice == 4)
+		{
+			counterResets();
+		}
+
+		if (menuChoice == 5)
+		{
+			system("cls");
+			printf("Shutting Down System...\n");
+			break;
+		}
+	}
+
+	return 0;
+}
